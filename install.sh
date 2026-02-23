@@ -3,7 +3,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SETTINGS_FILE="$HOME/.claude/settings.json"
-CLAUDE_JSON="$HOME/.claude/claude.json"
 HOOKS_DIR="$HOME/.claude/hooks/poke"
 BUN="$(which bun 2>/dev/null || echo "bun")"
 INDEX="$SCRIPT_DIR/src/index.ts"
@@ -24,24 +23,13 @@ else
   echo "[1/3] Dependencies already installed."
 fi
 
-# 2. Register MCP server in claude.json
+# 2. Register MCP server via claude CLI
 echo "[2/3] Registering MCP server..."
-mkdir -p "$(dirname "$CLAUDE_JSON")"
-[ -f "$CLAUDE_JSON" ] || echo '{}' > "$CLAUDE_JSON"
-
-if command -v jq &>/dev/null; then
-  if jq -e '.mcpServers.poke' "$CLAUDE_JSON" >/dev/null 2>&1; then
-    echo "  MCP server already registered in $CLAUDE_JSON"
-  else
-    jq --arg bun "$BUN" --arg index "$INDEX" '
-      .mcpServers.poke = {"type":"stdio","command":$bun,"args":[$index]}
-    ' "$CLAUDE_JSON" > "${CLAUDE_JSON}.tmp"
-    mv "${CLAUDE_JSON}.tmp" "$CLAUDE_JSON"
-    echo "  Added poke to $CLAUDE_JSON"
-  fi
+if claude mcp list 2>/dev/null | grep -q "^poke:"; then
+  echo "  MCP server already registered."
 else
-  echo "  jq not found — add manually to $CLAUDE_JSON:"
-  echo "    \"poke\": {\"type\":\"stdio\",\"command\":\"$BUN\",\"args\":[\"$INDEX\"]}"
+  claude mcp add poke -s user -- "$BUN" "$INDEX"
+  echo "  Registered poke MCP server (user scope)."
 fi
 
 # 3. Install hooks
