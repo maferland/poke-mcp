@@ -1,0 +1,5 @@
+{
+  "name": "poke",
+  "description": "Ephemeral reminder system for Claude Code sessions",
+  "author": { "name": "Marc-Antoine Ferland" }
+}

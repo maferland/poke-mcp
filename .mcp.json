@@ -1,0 +1,7 @@
+{
+  "poke": {
+    "type": "stdio",
+    "command": "bun",
+    "args": ["src/index.ts"]
+  }
+}

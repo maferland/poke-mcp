@@ -1,0 +1,22 @@
+{
+  "name": "poke-mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "bun src/index.ts",
+    "test": "bunx --bun vitest run",
+    "test:watch": "bunx --bun vitest"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "date-fns": "^4.1.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.5",
+    "@types/node": "^25.3.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
