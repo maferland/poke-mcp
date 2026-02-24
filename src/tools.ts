@@ -46,6 +46,7 @@ export function registerTools(
         summary: z.string().describe("What to remind about"),
         sessionId: z.string().optional().describe("Claude session ID for resume"),
         repoPath: z.string().optional().describe("Absolute path to repo"),
+        branch: z.string().optional().describe("Git branch name"),
         dueAt: z
           .string()
           .optional()

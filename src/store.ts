@@ -15,6 +15,7 @@ export interface Reminder {
   id: string;
   sessionId: string | null;
   repoPath: string | null;
+  branch: string | null;
   summary: string;
   dueAt: string | null;
   status: ReminderStatus;
@@ -27,6 +28,7 @@ export interface CreateInput {
   summary: string;
   sessionId?: string;
   repoPath?: string;
+  branch?: string;
   dueAt?: string;
 }
 
@@ -65,6 +67,14 @@ export class ReminderStore {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_session_unique
         ON reminders(session_id) WHERE session_id IS NOT NULL AND status IN ('active', 'snoozed', 'in_progress');
     `);
+
+    // Migration: add branch column
+    const cols = this.db
+      .prepare("PRAGMA table_info(reminders)")
+      .all() as { name: string }[];
+    if (!cols.some((c) => c.name === "branch")) {
+      this.db.exec("ALTER TABLE reminders ADD COLUMN branch TEXT");
+    }
   }
 
   private expireStale(): void {
@@ -90,13 +100,14 @@ export class ReminderStore {
 
     this.db
       .prepare(
-        `INSERT INTO reminders (id, session_id, repo_path, summary, due_at, status, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, 'active', ?, ?)`
+        `INSERT INTO reminders (id, session_id, repo_path, branch, summary, due_at, status, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)`
       )
       .run(
         id,
         input.sessionId ?? null,
         input.repoPath ?? null,
+        input.branch ?? null,
         input.summary,
         input.dueAt ?? null,
         now,
@@ -106,10 +117,21 @@ export class ReminderStore {
     return this.get(id)!;
   }
 
+  /** Resolve a full or prefix ID to the full UUID. Returns null if ambiguous or not found. */
+  private resolveId(id: string): string | null {
+    if (id.length === 36) return id;
+    const rows = this.db
+      .prepare("SELECT id FROM reminders WHERE id LIKE ? || '%' LIMIT 2")
+      .all(id) as { id: string }[];
+    return rows.length === 1 ? rows[0].id : null;
+  }
+
   get(id: string): Reminder | null {
     this.expireStale();
     this.unsnoozeDue();
-    const row = this.db.prepare("SELECT * FROM reminders WHERE id = ?").get(id);
+    const fullId = this.resolveId(id);
+    if (!fullId) return null;
+    const row = this.db.prepare("SELECT * FROM reminders WHERE id = ?").get(fullId);
     return row ? rowToReminder(row) : null;
   }
 
@@ -129,22 +151,25 @@ export class ReminderStore {
   }
 
   snooze(id: string, until: string): Reminder | null {
+    const fullId = this.resolveId(id) ?? id;
     this.db
       .prepare(
         "UPDATE reminders SET status = 'snoozed', snoozed_until = ? WHERE id = ?"
       )
-      .run(until, id);
-    return this.get(id);
+      .run(until, fullId);
+    return this.get(fullId);
   }
 
   dismiss(id: string): Reminder | null {
+    const fullId = this.resolveId(id) ?? id;
     this.db
       .prepare("UPDATE reminders SET status = 'dismissed' WHERE id = ?")
-      .run(id);
-    return this.get(id);
+      .run(fullId);
+    return this.get(fullId);
   }
 
   update(id: string, fields: { summary?: string; dueAt?: string }): Reminder | null {
+    const fullId = this.resolveId(id) ?? id;
     const sets: string[] = [];
     const params: unknown[] = [];
 
@@ -157,13 +182,13 @@ export class ReminderStore {
       params.push(fields.dueAt);
     }
 
-    if (sets.length === 0) return this.get(id);
+    if (sets.length === 0) return this.get(fullId);
 
-    params.push(id);
+    params.push(fullId);
     this.db
       .prepare(`UPDATE reminders SET ${sets.join(", ")} WHERE id = ?`)
       .run(...params);
-    return this.get(id);
+    return this.get(fullId);
   }
 
   findBySessionId(sessionId: string): Reminder | null {
@@ -184,11 +209,12 @@ export class ReminderStore {
         const expiresAt = addDays(new Date(), EXPIRY_DAYS).toISOString();
         this.db
           .prepare(
-            "UPDATE reminders SET summary = ?, due_at = ?, expires_at = ? WHERE id = ?"
+            "UPDATE reminders SET summary = ?, due_at = ?, branch = ?, expires_at = ? WHERE id = ?"
           )
           .run(
             input.summary,
             input.dueAt ?? existing.dueAt,
+            input.branch ?? existing.branch,
             expiresAt,
             existing.id
           );
@@ -199,10 +225,11 @@ export class ReminderStore {
   }
 
   resume(id: string): Reminder | null {
+    const fullId = this.resolveId(id) ?? id;
     this.db
       .prepare("UPDATE reminders SET status = 'in_progress' WHERE id = ?")
-      .run(id);
-    return this.get(id);
+      .run(fullId);
+    return this.get(fullId);
   }
 
   /** Test helper: manually set expires_at */
@@ -223,6 +250,7 @@ function rowToReminder(row: unknown): Reminder {
     id: r.id as string,
     sessionId: (r.session_id as string) ?? null,
     repoPath: (r.repo_path as string) ?? null,
+    branch: (r.branch as string) ?? null,
     summary: r.summary as string,
     dueAt: (r.due_at as string) ?? null,
     status: r.status as ReminderStatus,
