@@ -253,11 +253,12 @@ export function registerTools(
 
         const lines = [`Resumed: "${reminder.summary}"`, `Status: ${reminder.status}`];
 
-        if (reminder.sessionId && reminder.repoPath) {
+        if (reminder.sessionId && (reminder.sessionDir || reminder.repoPath)) {
           const skipFlag = dangerouslySkipPermissions
             ? " --dangerously-skip-permissions"
             : "";
-          const cmd = `cd ${reminder.repoPath} && claude --resume ${reminder.sessionId}${skipFlag}`;
+          const resumeDir = reminder.sessionDir ?? reminder.repoPath;
+          const cmd = `cd ${resumeDir} && claude --resume ${reminder.sessionId}${skipFlag}`;
           lines.push(`\nResume command:\n${cmd}`);
         } else if (reminder.sessionId) {
           lines.push(`Session: ${reminder.sessionId}`);
