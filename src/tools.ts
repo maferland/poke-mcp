@@ -1,35 +1,23 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { readdirSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
-import { homedir } from "node:os";
 import { type Reminder, type ReminderStore } from "./store.ts";
 import { parseDueAt } from "./date-parser.ts";
+import { detectSessionId } from "./session-detector.ts";
 
-function detectSessionId(): string | undefined {
-  const projectsDir = join(homedir(), ".claude", "projects");
-  let dir = process.cwd();
+type ToolResponse = {
+  content: { type: "text"; text: string }[];
+  isError?: boolean;
+};
 
-  while (dir !== "/") {
-    const encoded = dir.replace(/[/.]/g, "-");
-    const projectDir = join(projectsDir, encoded);
-    try {
-      const files = readdirSync(projectDir)
-        .filter((f) => f.endsWith(".jsonl"))
-        .map((f) => ({
-          name: f,
-          mtime: statSync(join(projectDir, f)).mtimeMs,
-        }))
-        .sort((a, b) => b.mtime - a.mtime);
-      if (files.length > 0) {
-        return basename(files[0].name, ".jsonl");
-      }
-    } catch {
-      // dir doesn't exist, try parent
-    }
-    dir = dirname(dir);
-  }
-  return undefined;
+function ok(text: string): ToolResponse {
+  return { content: [{ type: "text", text }] };
+}
+
+function err(e: unknown): ToolResponse {
+  return {
+    content: [{ type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` }],
+    isError: true,
+  };
 }
 
 export function registerTools(
@@ -59,33 +47,20 @@ export function registerTools(
         let dueAt: string | undefined;
         if (input.dueAt) {
           const parsed = parseDueAt(input.dueAt);
-          if (!parsed) {
-            return {
-              content: [{ type: "text" as const, text: `Cannot parse due_at: "${input.dueAt}"` }],
-              isError: true,
-            };
-          }
+          if (!parsed) return err(`Cannot parse due_at: "${input.dueAt}"`);
           dueAt = parsed.toISOString();
         }
 
         const sessionId = input.sessionId || detectSessionId();
         const { reminder, created } = store.upsert({ ...input, sessionId, dueAt });
         const verb = created ? "Created" : "Updated";
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `${verb} reminder ${reminder.id.slice(0, 8)}: "${reminder.summary}"${
-                reminder.dueAt ? ` (due ${reminder.dueAt})` : ""
-              }`,
-            },
-          ],
-        };
+        return ok(
+          `${verb} reminder ${reminder.id.slice(0, 8)}: "${reminder.summary}"${
+            reminder.dueAt ? ` (due ${reminder.dueAt})` : ""
+          }`
+        );
       } catch (e) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }],
-          isError: true,
-        };
+        return err(e);
       }
     }
   );
@@ -106,15 +81,11 @@ export function registerTools(
       try {
         const reminders = store.list(status);
         if (reminders.length === 0) {
-          return { content: [{ type: "text" as const, text: status ? `No ${status} reminders.` : "No reminders." }] };
+          return ok(status ? `No ${status} reminders.` : "No reminders.");
         }
-        const text = `${reminders.length} reminder(s):\n${reminders.map(formatReminder).join("\n")}`;
-        return { content: [{ type: "text" as const, text }] };
+        return ok(`${reminders.length} reminder(s):\n${reminders.map(formatReminder).join("\n")}`);
       } catch (e) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }],
-          isError: true,
-        };
+        return err(e);
       }
     }
   );
@@ -133,26 +104,12 @@ export function registerTools(
     async ({ id, until }) => {
       try {
         const parsed = parseDueAt(until);
-        if (!parsed) {
-          return {
-            content: [{ type: "text" as const, text: `Cannot parse until: "${until}"` }],
-            isError: true,
-          };
-        }
+        if (!parsed) return err(`Cannot parse until: "${until}"`);
         const reminder = store.snooze(id, parsed.toISOString());
-        if (!reminder) {
-          return { content: [{ type: "text" as const, text: `Reminder ${id} not found.` }], isError: true };
-        }
-        return {
-          content: [
-            { type: "text" as const, text: `Snoozed "${reminder.summary}" until ${reminder.snoozedUntil}` },
-          ],
-        };
+        if (!reminder) return err(`Reminder ${id} not found.`);
+        return ok(`Snoozed "${reminder.summary}" until ${reminder.snoozedUntil}`);
       } catch (e) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }],
-          isError: true,
-        };
+        return err(e);
       }
     }
   );
@@ -169,17 +126,10 @@ export function registerTools(
     async ({ id }) => {
       try {
         const reminder = store.dismiss(id);
-        if (!reminder) {
-          return { content: [{ type: "text" as const, text: `Reminder ${id} not found.` }], isError: true };
-        }
-        return {
-          content: [{ type: "text" as const, text: `Dismissed "${reminder.summary}".` }],
-        };
+        if (!reminder) return err(`Reminder ${id} not found.`);
+        return ok(`Dismissed "${reminder.summary}".`);
       } catch (e) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }],
-          isError: true,
-        };
+        return err(e);
       }
     }
   );
@@ -204,27 +154,15 @@ export function registerTools(
         let parsedDueAt: string | undefined;
         if (dueAt) {
           const parsed = parseDueAt(dueAt);
-          if (!parsed) {
-            return {
-              content: [{ type: "text" as const, text: `Cannot parse due_at: "${dueAt}"` }],
-              isError: true,
-            };
-          }
+          if (!parsed) return err(`Cannot parse due_at: "${dueAt}"`);
           parsedDueAt = parsed.toISOString();
         }
 
         const reminder = store.update(id, { summary, detail, dueAt: parsedDueAt });
-        if (!reminder) {
-          return { content: [{ type: "text" as const, text: `Reminder ${id} not found.` }], isError: true };
-        }
-        return {
-          content: [{ type: "text" as const, text: `Updated "${reminder.summary}".` }],
-        };
+        if (!reminder) return err(`Reminder ${id} not found.`);
+        return ok(`Updated "${reminder.summary}".`);
       } catch (e) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }],
-          isError: true,
-        };
+        return err(e);
       }
     }
   );
@@ -247,9 +185,7 @@ export function registerTools(
     async ({ id, dangerouslySkipPermissions }) => {
       try {
         const reminder = store.resume(id);
-        if (!reminder) {
-          return { content: [{ type: "text" as const, text: `Reminder ${id} not found.` }], isError: true };
-        }
+        if (!reminder) return err(`Reminder ${id} not found.`);
 
         const lines = [`Resumed: "${reminder.summary}"`, `Status: ${reminder.status}`];
 
@@ -267,12 +203,9 @@ export function registerTools(
           lines.push(`Repo: ${reminder.repoPath}`);
         }
 
-        return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+        return ok(lines.join("\n"));
       } catch (e) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }],
-          isError: true,
-        };
+        return err(e);
       }
     }
   );
@@ -280,6 +213,7 @@ export function registerTools(
 
 function formatReminder(r: Reminder): string {
   const due = r.dueAt ? ` due:${r.dueAt}` : "";
-  const repo = r.repoPath ? ` [${r.repoPath.split("/").pop()}]` : "";
+  const repoLabel = r.repoName ?? r.repoPath?.split("/").pop();
+  const repo = repoLabel ? ` [${repoLabel}]` : "";
   return `- ${r.id.slice(0, 8)} | ${r.status} | "${r.summary}"${repo}${due}`;
 }
