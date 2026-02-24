@@ -50,6 +50,20 @@ export class ReminderStore {
       );
       CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status);
       CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(due_at);
+
+      -- Deduplicate before creating unique index (keep newest per session_id)
+      DELETE FROM reminders WHERE id IN (
+        SELECT id FROM reminders r
+        WHERE r.session_id IS NOT NULL
+          AND r.status IN ('active', 'snoozed', 'in_progress')
+          AND r.created_at < (
+            SELECT MAX(r2.created_at) FROM reminders r2
+            WHERE r2.session_id = r.session_id
+              AND r2.status IN ('active', 'snoozed', 'in_progress')
+          )
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_session_unique
+        ON reminders(session_id) WHERE session_id IS NOT NULL AND status IN ('active', 'snoozed', 'in_progress');
     `);
   }
 
@@ -150,6 +164,38 @@ export class ReminderStore {
       .prepare(`UPDATE reminders SET ${sets.join(", ")} WHERE id = ?`)
       .run(...params);
     return this.get(id);
+  }
+
+  findBySessionId(sessionId: string): Reminder | null {
+    this.expireStale();
+    this.unsnoozeDue();
+    const row = this.db
+      .prepare(
+        "SELECT * FROM reminders WHERE session_id = ? AND status IN ('active', 'snoozed', 'in_progress')"
+      )
+      .get(sessionId);
+    return row ? rowToReminder(row) : null;
+  }
+
+  upsert(input: CreateInput): { reminder: Reminder; created: boolean } {
+    if (input.sessionId) {
+      const existing = this.findBySessionId(input.sessionId);
+      if (existing) {
+        const expiresAt = addDays(new Date(), EXPIRY_DAYS).toISOString();
+        this.db
+          .prepare(
+            "UPDATE reminders SET summary = ?, due_at = ?, expires_at = ? WHERE id = ?"
+          )
+          .run(
+            input.summary,
+            input.dueAt ?? existing.dueAt,
+            expiresAt,
+            existing.id
+          );
+        return { reminder: this.get(existing.id)!, created: false };
+      }
+    }
+    return { reminder: this.create(input), created: true };
   }
 
   resume(id: string): Reminder | null {

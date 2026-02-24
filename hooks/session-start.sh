@@ -1,4 +1,5 @@
 #!/bin/bash
+# poke-managed v2
 set -euo pipefail
 
 DB="$HOME/.claude/poke.db"

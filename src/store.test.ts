@@ -110,4 +110,62 @@ describe("ReminderStore", () => {
     expect(store.snooze("nonexistent", "2025-01-01T00:00:00Z")).toBeNull();
     expect(store.resume("nonexistent")).toBeNull();
   });
+
+  describe("findBySessionId", () => {
+    it("finds active reminder by session_id", () => {
+      const r = store.create({ summary: "test", sessionId: "sess-1" });
+      const found = store.findBySessionId("sess-1");
+      expect(found?.id).toBe(r.id);
+    });
+
+    it("returns null for dismissed reminder", () => {
+      const r = store.create({ summary: "test", sessionId: "sess-1" });
+      store.dismiss(r.id);
+      expect(store.findBySessionId("sess-1")).toBeNull();
+    });
+
+    it("returns null for unknown session_id", () => {
+      expect(store.findBySessionId("nonexistent")).toBeNull();
+    });
+  });
+
+  describe("upsert", () => {
+    it("creates if no match", () => {
+      const { reminder, created } = store.upsert({ summary: "new", sessionId: "sess-1" });
+      expect(created).toBe(true);
+      expect(reminder.summary).toBe("new");
+      expect(reminder.sessionId).toBe("sess-1");
+    });
+
+    it("updates existing by session_id", () => {
+      const { reminder: first } = store.upsert({ summary: "old", sessionId: "sess-1" });
+      const { reminder: second, created } = store.upsert({ summary: "new", sessionId: "sess-1" });
+      expect(created).toBe(false);
+      expect(second.id).toBe(first.id);
+      expect(second.summary).toBe("new");
+    });
+
+    it("resets expires_at on update", () => {
+      const { reminder: first } = store.upsert({ summary: "test", sessionId: "sess-1" });
+      store._setExpiresAt(first.id, "2025-01-01T00:00:00.000Z");
+      const { reminder: second } = store.upsert({ summary: "test2", sessionId: "sess-1" });
+      expect(new Date(second.expiresAt).getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it("ignores dismissed reminders (creates new)", () => {
+      const { reminder: first } = store.upsert({ summary: "old", sessionId: "sess-1" });
+      store.dismiss(first.id);
+      const { reminder: second, created } = store.upsert({ summary: "new", sessionId: "sess-1" });
+      expect(created).toBe(true);
+      expect(second.id).not.toBe(first.id);
+    });
+
+    it("without session_id always creates new", () => {
+      const { created: c1 } = store.upsert({ summary: "a" });
+      const { created: c2 } = store.upsert({ summary: "b" });
+      expect(c1).toBe(true);
+      expect(c2).toBe(true);
+      expect(store.list()).toHaveLength(2);
+    });
+  });
 });
