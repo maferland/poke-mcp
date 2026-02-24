@@ -41,24 +41,61 @@ fi
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$(pwd)")"
 REPO_NAME="$(basename "$REPO_ROOT")"
 
-# Build summary from repo + branch
-BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
-if [ -n "$BRANCH" ] && [ "$BRANCH" != "main" ] && [ "$BRANCH" != "master" ] && [ "$BRANCH" != "HEAD" ]; then
-  SUMMARY="$REPO_NAME ($BRANCH)"
-else
-  SUMMARY="Session in $REPO_NAME"
+# Build summary from session transcript
+ENCODED_DIR=$(echo -n "$REPO_ROOT" | sed 's|[/.]|-|g')
+SESSION_FILE="$HOME/.claude/projects/$ENCODED_DIR/$SESSION_ID.jsonl"
+
+SUMMARY=""
+if [ -f "$SESSION_FILE" ]; then
+  # Extract last user text message from transcript (skip tool results, images, system tags)
+  SUMMARY=$(python3 -c "
+import json, sys, re
+last = ''
+with open(sys.argv[1]) as f:
+    for line in f:
+        try:
+            obj = json.loads(line)
+        except: continue
+        if obj.get('type') != 'user': continue
+        msg = obj.get('message', {})
+        content = msg.get('content', []) if isinstance(msg, dict) else []
+        for part in (content if isinstance(content, list) else []):
+            if isinstance(part, dict) and part.get('type') == 'text':
+                text = part['text'].strip()
+                # Strip system-reminder tags, image refs, command tags
+                text = re.sub(r'<system-reminder>.*?</system-reminder>', '', text, flags=re.DOTALL).strip()
+                text = re.sub(r'<local-command.*?</local-command-stdout>', '', text, flags=re.DOTALL).strip()
+                text = re.sub(r'\[Image:.*?\]', '', text).strip()
+                text = re.sub(r'\[image\]', '', text, flags=re.IGNORECASE).strip()
+                if text and len(text) > 5:
+                    last = text
+print(last[:120])
+" "$SESSION_FILE" 2>/dev/null)
 fi
 
-# SQLite upsert — insert or just bump expires_at (preserve Claude's summary)
+# Fallback to repo + branch
+if [ -z "$SUMMARY" ]; then
+  BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
+  if [ -n "$BRANCH" ] && [ "$BRANCH" != "main" ] && [ "$BRANCH" != "master" ] && [ "$BRANCH" != "HEAD" ]; then
+    SUMMARY="$REPO_NAME ($BRANCH)"
+  else
+    SUMMARY="Session in $REPO_NAME"
+  fi
+fi
+
+# Escape single quotes for SQL
+SUMMARY_SQL=$(echo "$SUMMARY" | sed "s/'/''/g")
+
+# SQLite upsert — insert or update summary + expires_at
 EXPIRES_AT="$(date -u -v+7d '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null || date -u -d '+7 days' '+%Y-%m-%dT%H:%M:%S.000Z')"
 NOW_ISO="$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
 ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 
 sqlite3 "$DB" <<SQL
 INSERT INTO reminders (id, session_id, repo_path, summary, status, created_at, expires_at)
-VALUES ('$ID', '$SESSION_ID', '$REPO_ROOT', '$SUMMARY', 'active', '$NOW_ISO', '$EXPIRES_AT')
+VALUES ('$ID', '$SESSION_ID', '$REPO_ROOT', '$SUMMARY_SQL', 'active', '$NOW_ISO', '$EXPIRES_AT')
 ON CONFLICT(session_id) WHERE session_id IS NOT NULL AND status IN ('active', 'snoozed', 'in_progress')
-DO UPDATE SET expires_at = '$EXPIRES_AT';
+DO UPDATE SET summary = '$SUMMARY_SQL', expires_at = '$EXPIRES_AT';
 SQL
 
 # Touch checkpoint
