@@ -1,9 +1,14 @@
 import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { addDays } from "date-fns";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 const EXPIRY_DAYS = 7;
 const VALID_STATUSES = new Set(["active", "snoozed", "dismissed", "expired", "in_progress"]);
+
+type ReminderRow = { id: string; session_id: string; repo_path: string | null; session_dir: string | null };
 
 export type ReminderStatus =
   | "active"
@@ -41,9 +46,11 @@ export interface CreateInput {
 
 export class ReminderStore {
   private db: Database;
+  private projectsDir: string;
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, projectsDir?: string) {
     this.db = new Database(dbPath);
+    this.projectsDir = projectsDir ?? join(homedir(), ".claude", "projects");
     this.initSchema();
     this.runMigrations();
   }
@@ -112,6 +119,43 @@ export class ReminderStore {
       .run();
   }
 
+  private healSessions(): void {
+    const rows = this.db
+      .prepare(
+        "SELECT id, session_id, repo_path, session_dir FROM reminders WHERE session_id IS NOT NULL AND status IN ('active', 'snoozed', 'in_progress')"
+      )
+      .all() as ReminderRow[];
+
+    for (const row of rows) {
+      const path = row.session_dir ?? row.repo_path;
+      if (!path) continue;
+
+      const encodedPath = path.replace(/[/.]/g, "-");
+      const projectDir = join(this.projectsDir, encodedPath);
+      const sessionFile = join(projectDir, `${row.session_id}.jsonl`);
+
+      if (existsSync(sessionFile)) continue;
+
+      if (!existsSync(projectDir)) {
+        this.db.prepare("UPDATE reminders SET session_id = NULL WHERE id = ?").run(row.id);
+        continue;
+      }
+
+      const files = readdirSync(projectDir).filter((f) => f.endsWith(".jsonl"));
+      if (files.length === 0) {
+        this.db.prepare("UPDATE reminders SET session_id = NULL WHERE id = ?").run(row.id);
+        continue;
+      }
+
+      const newest = files
+        .map((f) => ({ file: f, mtime: statSync(join(projectDir, f)).mtimeMs }))
+        .sort((a, b) => b.mtime - a.mtime)[0];
+
+      const newSessionId = newest.file.replace(/\.jsonl$/, "");
+      this.db.prepare("UPDATE reminders SET session_id = ? WHERE id = ?").run(newSessionId, row.id);
+    }
+  }
+
   /** Run expiry + unsnooze in one call (used by CLI). */
   expire(): void {
     this.expireStale();
@@ -175,6 +219,7 @@ export class ReminderStore {
   list(status?: ReminderStatus): Reminder[] {
     this.expireStale();
     this.unsnoozeDue();
+    this.healSessions();
     if (status) {
       return this.db
         .prepare("SELECT * FROM reminders WHERE status = ? ORDER BY created_at DESC")
