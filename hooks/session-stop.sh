@@ -19,6 +19,7 @@ while [ "$DIR" != "/" ]; do
     [ -z "$LATEST" ] && LATEST=$(ls -t "$PROJECT_DIR"/*.jsonl 2>/dev/null | head -1)
     if [ -n "$LATEST" ]; then
       SESSION_ID=$(basename "$LATEST" .jsonl)
+      SESSION_DIR="$DIR"
       break
     fi
   fi
@@ -51,8 +52,8 @@ if [ -n "$GIT_COMMON" ] && [ "$GIT_COMMON" != ".git" ]; then
   [ -n "$MAIN_REPO" ] && REPO_NAME="$(basename "$MAIN_REPO")"
 fi
 
-# Build summary from session transcript
-ENCODED_DIR=$(echo -n "$REPO_ROOT" | sed 's|[/.]|-|g')
+# Build summary from session transcript (use SESSION_DIR where file was found, not REPO_ROOT)
+ENCODED_DIR=$(echo -n "$SESSION_DIR" | sed 's|[/.]|-|g')
 SESSION_FILE="$HOME/.claude/projects/$ENCODED_DIR/$SESSION_ID.jsonl"
 
 SUMMARY=""
@@ -112,12 +113,14 @@ BRANCH_SQL=$(echo "$BRANCH" | sed "s/'/''/g")
 # Ensure columns exist (migrations)
 sqlite3 "$DB" "ALTER TABLE reminders ADD COLUMN branch TEXT;" 2>/dev/null || true
 sqlite3 "$DB" "ALTER TABLE reminders ADD COLUMN detail TEXT;" 2>/dev/null || true
+sqlite3 "$DB" "ALTER TABLE reminders ADD COLUMN session_dir TEXT;" 2>/dev/null || true
 
 # SQLite upsert — insert or update summary + detail + expires_at + branch
 EXPIRES_AT="$(date -u -v+7d '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null || date -u -d '+7 days' '+%Y-%m-%dT%H:%M:%S.000Z')"
 NOW_ISO="$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
 ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 REPO_ROOT_SQL=$(echo "$REPO_ROOT" | sed "s/'/''/g")
+SESSION_DIR_SQL=$(echo "$SESSION_DIR" | sed "s/'/''/g")
 
 sqlite3 "$DB" <<SQL
 -- Auto-dismiss stale reminders for same repo when session changes
@@ -125,12 +128,13 @@ UPDATE reminders SET status = 'dismissed'
 WHERE repo_path = '$REPO_ROOT_SQL' AND session_id != '$SESSION_ID'
   AND status IN ('active', 'snoozed', 'in_progress');
 
-INSERT INTO reminders (id, session_id, repo_path, branch, summary, detail, status, created_at, expires_at)
-VALUES ('$ID', '$SESSION_ID', '$REPO_ROOT', nullif('$BRANCH_SQL',''), '$SUMMARY_SQL', nullif('$DETAIL_SQL',''), 'active', '$NOW_ISO', '$EXPIRES_AT')
+INSERT INTO reminders (id, session_id, repo_path, session_dir, branch, summary, detail, status, created_at, expires_at)
+VALUES ('$ID', '$SESSION_ID', '$REPO_ROOT', '$SESSION_DIR', nullif('$BRANCH_SQL',''), '$SUMMARY_SQL', nullif('$DETAIL_SQL',''), 'active', '$NOW_ISO', '$EXPIRES_AT')
 ON CONFLICT(session_id) WHERE session_id IS NOT NULL AND status IN ('active', 'snoozed', 'in_progress')
 DO UPDATE SET
   summary = CASE WHEN reminders.summary LIKE 'Session in %' OR reminders.summary = '' THEN '$SUMMARY_SQL' ELSE reminders.summary END,
   detail = COALESCE(nullif('$DETAIL_SQL',''), reminders.detail),
+  session_dir = '$SESSION_DIR',
   branch = nullif('$BRANCH_SQL',''),
   expires_at = '$EXPIRES_AT',
   created_at = '$NOW_ISO';

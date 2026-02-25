@@ -15,6 +15,7 @@ export interface Reminder {
   id: string;
   sessionId: string | null;
   repoPath: string | null;
+  sessionDir: string | null;
   branch: string | null;
   summary: string;
   detail: string | null;
@@ -30,6 +31,7 @@ export interface CreateInput {
   detail?: string;
   sessionId?: string;
   repoPath?: string;
+  sessionDir?: string;
   branch?: string;
   dueAt?: string;
 }
@@ -80,6 +82,9 @@ export class ReminderStore {
     if (!cols.some((c) => c.name === "detail")) {
       this.db.exec("ALTER TABLE reminders ADD COLUMN detail TEXT");
     }
+    if (!cols.some((c) => c.name === "session_dir")) {
+      this.db.exec("ALTER TABLE reminders ADD COLUMN session_dir TEXT");
+    }
   }
 
   private expireStale(): void {
@@ -105,13 +110,14 @@ export class ReminderStore {
 
     this.db
       .prepare(
-        `INSERT INTO reminders (id, session_id, repo_path, branch, summary, detail, due_at, status, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`
+        `INSERT INTO reminders (id, session_id, repo_path, session_dir, branch, summary, detail, due_at, status, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`
       )
       .run(
         id,
         input.sessionId ?? null,
         input.repoPath ?? null,
+        input.sessionDir ?? null,
         input.branch ?? null,
         input.summary,
         input.detail ?? null,
@@ -219,13 +225,14 @@ export class ReminderStore {
         const expiresAt = addDays(new Date(), EXPIRY_DAYS).toISOString();
         this.db
           .prepare(
-            "UPDATE reminders SET summary = ?, detail = ?, due_at = ?, branch = ?, expires_at = ? WHERE id = ?"
+            "UPDATE reminders SET summary = ?, detail = ?, due_at = ?, branch = ?, session_dir = ?, expires_at = ? WHERE id = ?"
           )
           .run(
             input.summary,
             input.detail ?? existing.detail,
             input.dueAt ?? existing.dueAt,
             input.branch ?? existing.branch,
+            input.sessionDir ?? existing.sessionDir,
             expiresAt,
             existing.id
           );
@@ -261,6 +268,7 @@ function rowToReminder(row: unknown): Reminder {
     id: r.id as string,
     sessionId: (r.session_id as string) ?? null,
     repoPath: (r.repo_path as string) ?? null,
+    sessionDir: (r.session_dir as string) ?? null,
     branch: (r.branch as string) ?? null,
     summary: r.summary as string,
     detail: (r.detail as string) ?? null,
