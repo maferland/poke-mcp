@@ -1,7 +1,36 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { readdirSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { homedir } from "node:os";
 import { type Reminder, type ReminderStore } from "./store.ts";
 import { parseDueAt } from "./date-parser.ts";
+
+function detectSessionId(): string | undefined {
+  const projectsDir = join(homedir(), ".claude", "projects");
+  let dir = process.cwd();
+
+  while (dir !== "/") {
+    const encoded = dir.replace(/[/.]/g, "-");
+    const projectDir = join(projectsDir, encoded);
+    try {
+      const files = readdirSync(projectDir)
+        .filter((f) => f.endsWith(".jsonl"))
+        .map((f) => ({
+          name: f,
+          mtime: statSync(join(projectDir, f)).mtimeMs,
+        }))
+        .sort((a, b) => b.mtime - a.mtime);
+      if (files.length > 0) {
+        return basename(files[0].name, ".jsonl");
+      }
+    } catch {
+      // dir doesn't exist, try parent
+    }
+    dir = dirname(dir);
+  }
+  return undefined;
+}
 
 export function registerTools(
   server: McpServer,
@@ -37,7 +66,8 @@ export function registerTools(
           dueAt = parsed.toISOString();
         }
 
-        const reminder = store.create({ ...input, dueAt });
+        const sessionId = input.sessionId || detectSessionId();
+        const reminder = store.create({ ...input, sessionId, dueAt });
         return {
           content: [
             {
