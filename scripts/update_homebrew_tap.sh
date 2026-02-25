@@ -24,7 +24,7 @@ class PokeMcp < Formula
   url "https://github.com/maferland/poke-mcp.git", tag: "v$FORMULA_VERSION"
   license "MIT"
 
-  depends_on "bun"
+  depends_on "oven-sh/bun/bun"
   depends_on "jq"
 
   def install
