@@ -5,7 +5,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const EXPIRY_DAYS = 7;
+const EXPIRY_DAYS = 14;
 const VALID_STATUSES = new Set(["active", "snoozed", "dismissed", "expired", "in_progress"]);
 
 type ReminderRow = { id: string; session_id: string; repo_path: string | null; session_dir: string | null };
@@ -162,13 +162,13 @@ export class ReminderStore {
     this.unsnoozeDue();
   }
 
-  /** Dismiss active reminders for a repo that belong to a different session. */
-  dismissOtherSessions(repoPath: string, currentSessionId: string): void {
+  /** Dismiss active reminders for a repo+branch that belong to a different session. */
+  dismissStaleSameBranch(repoPath: string, branch: string, currentSessionId: string): void {
     this.db
       .prepare(
-        "UPDATE reminders SET status = 'dismissed' WHERE repo_path = ? AND session_id != ? AND status IN ('active', 'snoozed', 'in_progress')"
+        "UPDATE reminders SET status = 'dismissed' WHERE repo_path = ? AND branch = ? AND session_id != ? AND status IN ('active', 'snoozed', 'in_progress')"
       )
-      .run(repoPath, currentSessionId);
+      .run(repoPath, branch, currentSessionId);
   }
 
   create(input: CreateInput): Reminder {

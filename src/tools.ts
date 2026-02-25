@@ -214,6 +214,7 @@ export function registerTools(
 function formatReminder(r: Reminder): string {
   const due = r.dueAt ? ` due:${r.dueAt}` : "";
   const repoLabel = r.repoName ?? r.repoPath?.split("/").pop();
-  const repo = repoLabel ? ` [${repoLabel}]` : "";
+  const branchSuffix = r.branch ? `:${r.branch}` : "";
+  const repo = repoLabel ? ` [${repoLabel}${branchSuffix}]` : "";
   return `- ${r.id.slice(0, 8)} | ${r.status} | "${r.summary}"${repo}${due}`;
 }
