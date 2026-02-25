@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { ReminderStore } from "./store.ts";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -166,6 +166,50 @@ describe("ReminderStore", () => {
       expect(c1).toBe(true);
       expect(c2).toBe(true);
       expect(store.list()).toHaveLength(2);
+    });
+  });
+
+  describe("healSessions", () => {
+    let projectsDir: string;
+
+    beforeEach(() => {
+      projectsDir = mkdtempSync(join(tmpdir(), "poke-projects-"));
+      store.close();
+      rmSync(tmpDir, { recursive: true });
+      tmpDir = mkdtempSync(join(tmpdir(), "poke-test-"));
+      store = new ReminderStore(join(tmpDir, "test.db"), projectsDir);
+    });
+
+    it("valid session → no change", () => {
+      const r = store.create({ summary: "test", sessionId: "sess-123", repoPath: "/foo/bar" });
+      const projectDir = join(projectsDir, "-foo-bar");
+      mkdirSync(projectDir, { recursive: true });
+      writeFileSync(join(projectDir, "sess-123.jsonl"), "");
+      const found = store.list().find((rem) => rem.id === r.id);
+      expect(found?.sessionId).toBe("sess-123");
+    });
+
+    it("stale session → healed", () => {
+      const r = store.create({ summary: "test", sessionId: "old-sess", repoPath: "/foo/bar" });
+      const projectDir = join(projectsDir, "-foo-bar");
+      mkdirSync(projectDir, { recursive: true });
+      writeFileSync(join(projectDir, "new-sess.jsonl"), "");
+      const found = store.list().find((rem) => rem.id === r.id);
+      expect(found?.sessionId).toBe("new-sess");
+    });
+
+    it("no sessions → cleared", () => {
+      const r = store.create({ summary: "test", sessionId: "old-sess", repoPath: "/foo/bar" });
+      const projectDir = join(projectsDir, "-foo-bar");
+      mkdirSync(projectDir, { recursive: true });
+      const found = store.list().find((rem) => rem.id === r.id);
+      expect(found?.sessionId).toBeNull();
+    });
+
+    it("no repo_path → skipped", () => {
+      const r = store.create({ summary: "test", sessionId: "sess-123" });
+      const found = store.list().find((rem) => rem.id === r.id);
+      expect(found?.sessionId).toBe("sess-123");
     });
   });
 });
