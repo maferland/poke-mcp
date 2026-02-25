@@ -43,8 +43,10 @@ async function checkpointSession(throttleSeconds: number): Promise<void> {
 
   const store = getStore();
   try {
-    // Auto-dismiss stale reminders for same repo when session changes
-    store.dismissOtherSessions(ctx.repoPath, ctx.sessionId);
+    // Auto-dismiss stale reminders for same repo+branch when session changes
+    if (ctx.branch) {
+      store.dismissStaleSameBranch(ctx.repoPath, ctx.branch, ctx.sessionId);
+    }
 
     store.upsert({
       summary,
@@ -82,7 +84,7 @@ function list(): void {
 
     console.log("POKE: Active reminders:");
     for (const r of reminders.slice(0, 10)) {
-      console.log(`  - [${r.id}] ${r.summary}`);
+      console.log(`  - [${r.id}] ${r.branch ? `(${r.branch}) ` : ""}${r.summary}`);
       if (r.sessionId) {
         console.log(`    session: ${r.sessionId}`);
       }

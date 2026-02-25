@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ReminderStore } from "./store.ts";
@@ -38,10 +38,10 @@ describe("CLI store operations", () => {
     });
   });
 
-  describe("dismissOtherSessions()", () => {
-    it("dismisses reminders from other sessions for same repo", () => {
-      store.create({ summary: "old", sessionId: "old-session", repoPath: "/repo" });
-      store.create({ summary: "current", sessionId: "new-session", repoPath: "/repo" });
+  describe("dismissStaleSameBranch()", () => {
+    it("dismisses reminders from other sessions for same repo+branch", () => {
+      const old = store.create({ summary: "old", sessionId: "old-session", repoPath: "/repo", branch: "main" });
+      const current = store.create({ summary: "current", sessionId: "new-session", repoPath: "/repo", branch: "main" });
 
       // Create session files so healSessions doesn't clear them
       const repoDir = join(projectsDir, "-repo");
@@ -49,24 +49,35 @@ describe("CLI store operations", () => {
       writeFileSync(join(repoDir, "old-session.jsonl"), "");
       writeFileSync(join(repoDir, "new-session.jsonl"), "");
 
-      store.dismissOtherSessions("/repo", "new-session");
+      store.dismissStaleSameBranch("/repo", "main", "new-session");
 
-      const all = store.list();
-      const old = all.find((r) => r.sessionId === "old-session");
-      const current = all.find((r) => r.sessionId === "new-session");
-      expect(old?.status).toBe("dismissed");
-      expect(current?.status).toBe("active");
+      expect(store.get(old.id)?.status).toBe("dismissed");
+      expect(store.get(current.id)?.status).toBe("active");
     });
 
     it("does not affect reminders from other repos", () => {
-      store.create({ summary: "other repo", sessionId: "other", repoPath: "/other" });
+      store.create({ summary: "other repo", sessionId: "other", repoPath: "/other", branch: "main" });
 
       // Create session file
       const otherDir = join(projectsDir, "-other");
       mkdirSync(otherDir, { recursive: true });
       writeFileSync(join(otherDir, "other.jsonl"), "");
 
-      store.dismissOtherSessions("/repo", "new-session");
+      store.dismissStaleSameBranch("/repo", "main", "new-session");
+
+      const r = store.findBySessionId("other");
+      expect(r?.status).toBe("active");
+    });
+
+    it("does not affect reminders from other branches", () => {
+      store.create({ summary: "other branch", sessionId: "other", repoPath: "/repo", branch: "feature" });
+
+      // Create session file
+      const repoDir = join(projectsDir, "-repo");
+      mkdirSync(repoDir, { recursive: true });
+      writeFileSync(join(repoDir, "other.jsonl"), "");
+
+      store.dismissStaleSameBranch("/repo", "main", "new-session");
 
       const r = store.findBySessionId("other");
       expect(r?.status).toBe("active");
