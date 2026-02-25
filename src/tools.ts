@@ -44,6 +44,7 @@ export function registerTools(
         "Create a poke reminder. due_at accepts ISO8601 or relative ('2h', '30m', 'tomorrow 9am').",
       inputSchema: z.object({
         summary: z.string().describe("What to remind about"),
+        detail: z.string().optional().describe("Longer context — recent work, next steps, blockers"),
         sessionId: z.string().optional().describe("Claude session ID for resume"),
         repoPath: z.string().optional().describe("Absolute path to repo"),
         branch: z.string().optional().describe("Git branch name"),
@@ -191,13 +192,14 @@ export function registerTools(
       inputSchema: z.object({
         id: z.string().describe("Reminder ID"),
         summary: z.string().optional().describe("New summary"),
+        detail: z.string().optional().describe("New detail/context"),
         dueAt: z
           .string()
           .optional()
           .describe("New due_at — ISO8601 or relative"),
       }),
     },
-    async ({ id, summary, dueAt }) => {
+    async ({ id, summary, detail, dueAt }) => {
       try {
         let parsedDueAt: string | undefined;
         if (dueAt) {
@@ -211,7 +213,7 @@ export function registerTools(
           parsedDueAt = parsed.toISOString();
         }
 
-        const reminder = store.update(id, { summary, dueAt: parsedDueAt });
+        const reminder = store.update(id, { summary, detail, dueAt: parsedDueAt });
         if (!reminder) {
           return { content: [{ type: "text" as const, text: `Reminder ${id} not found.` }], isError: true };
         }

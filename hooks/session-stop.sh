@@ -56,11 +56,20 @@ ENCODED_DIR=$(echo -n "$REPO_ROOT" | sed 's|[/.]|-|g')
 SESSION_FILE="$HOME/.claude/projects/$ENCODED_DIR/$SESSION_ID.jsonl"
 
 SUMMARY=""
+DETAIL=""
 if [ -f "$SESSION_FILE" ]; then
-  # Extract last user text message from transcript (skip tool results, images, system tags)
-  SUMMARY=$(python3 -c "
+  # Extract last user message as summary + last few as detail
+  eval "$(python3 -c "
 import json, sys, re
-last = ''
+
+def clean(text):
+    text = re.sub(r'<system-reminder>.*?</system-reminder>', '', text, flags=re.DOTALL).strip()
+    text = re.sub(r'<local-command.*?</local-command-stdout>', '', text, flags=re.DOTALL).strip()
+    text = re.sub(r'\[Image:.*?\]', '', text).strip()
+    text = re.sub(r'\[image\]', '', text, flags=re.IGNORECASE).strip()
+    return text
+
+msgs = []
 with open(sys.argv[1]) as f:
     for line in f:
         try:
@@ -71,16 +80,19 @@ with open(sys.argv[1]) as f:
         content = msg.get('content', []) if isinstance(msg, dict) else []
         for part in (content if isinstance(content, list) else []):
             if isinstance(part, dict) and part.get('type') == 'text':
-                text = part['text'].strip()
-                # Strip system-reminder tags, image refs, command tags
-                text = re.sub(r'<system-reminder>.*?</system-reminder>', '', text, flags=re.DOTALL).strip()
-                text = re.sub(r'<local-command.*?</local-command-stdout>', '', text, flags=re.DOTALL).strip()
-                text = re.sub(r'\[Image:.*?\]', '', text).strip()
-                text = re.sub(r'\[image\]', '', text, flags=re.IGNORECASE).strip()
+                text = clean(part['text'])
                 if text and len(text) > 5:
-                    last = text
-print(last[:120])
-" "$SESSION_FILE" 2>/dev/null)
+                    msgs.append(text)
+
+summary = msgs[-1][:120] if msgs else ''
+# Last 5 messages as detail context
+detail = '\n---\n'.join(m[:200] for m in msgs[-5:]) if len(msgs) > 1 else ''
+
+# Shell-safe output
+import shlex
+print(f'SUMMARY={shlex.quote(summary)}')
+print(f'DETAIL={shlex.quote(detail[:1000])}')
+" "$SESSION_FILE" 2>/dev/null)"
 fi
 
 # Fallback to repo + branch
@@ -94,12 +106,14 @@ BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
 
 # Escape single quotes for SQL
 SUMMARY_SQL=$(echo "$SUMMARY" | sed "s/'/''/g")
+DETAIL_SQL=$(echo "$DETAIL" | sed "s/'/''/g")
 BRANCH_SQL=$(echo "$BRANCH" | sed "s/'/''/g")
 
-# Ensure branch column exists (migration)
+# Ensure columns exist (migrations)
 sqlite3 "$DB" "ALTER TABLE reminders ADD COLUMN branch TEXT;" 2>/dev/null || true
+sqlite3 "$DB" "ALTER TABLE reminders ADD COLUMN detail TEXT;" 2>/dev/null || true
 
-# SQLite upsert — insert or update summary + expires_at + branch
+# SQLite upsert — insert or update summary + detail + expires_at + branch
 EXPIRES_AT="$(date -u -v+7d '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null || date -u -d '+7 days' '+%Y-%m-%dT%H:%M:%S.000Z')"
 NOW_ISO="$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
 ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
@@ -111,10 +125,15 @@ UPDATE reminders SET status = 'dismissed'
 WHERE repo_path = '$REPO_ROOT_SQL' AND session_id != '$SESSION_ID'
   AND status IN ('active', 'snoozed', 'in_progress');
 
-INSERT INTO reminders (id, session_id, repo_path, branch, summary, status, created_at, expires_at)
-VALUES ('$ID', '$SESSION_ID', '$REPO_ROOT', nullif('$BRANCH_SQL',''), '$SUMMARY_SQL', 'active', '$NOW_ISO', '$EXPIRES_AT')
+INSERT INTO reminders (id, session_id, repo_path, branch, summary, detail, status, created_at, expires_at)
+VALUES ('$ID', '$SESSION_ID', '$REPO_ROOT', nullif('$BRANCH_SQL',''), '$SUMMARY_SQL', nullif('$DETAIL_SQL',''), 'active', '$NOW_ISO', '$EXPIRES_AT')
 ON CONFLICT(session_id) WHERE session_id IS NOT NULL AND status IN ('active', 'snoozed', 'in_progress')
-DO UPDATE SET summary = '$SUMMARY_SQL', branch = nullif('$BRANCH_SQL',''), expires_at = '$EXPIRES_AT', created_at = '$NOW_ISO';
+DO UPDATE SET
+  summary = CASE WHEN reminders.summary LIKE 'Session in %' OR reminders.summary = '' THEN '$SUMMARY_SQL' ELSE reminders.summary END,
+  detail = COALESCE(nullif('$DETAIL_SQL',''), reminders.detail),
+  branch = nullif('$BRANCH_SQL',''),
+  expires_at = '$EXPIRES_AT',
+  created_at = '$NOW_ISO';
 SQL
 
 # Touch checkpoint

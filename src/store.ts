@@ -17,6 +17,7 @@ export interface Reminder {
   repoPath: string | null;
   branch: string | null;
   summary: string;
+  detail: string | null;
   dueAt: string | null;
   status: ReminderStatus;
   snoozedUntil: string | null;
@@ -26,6 +27,7 @@ export interface Reminder {
 
 export interface CreateInput {
   summary: string;
+  detail?: string;
   sessionId?: string;
   repoPath?: string;
   branch?: string;
@@ -75,6 +77,9 @@ export class ReminderStore {
     if (!cols.some((c) => c.name === "branch")) {
       this.db.exec("ALTER TABLE reminders ADD COLUMN branch TEXT");
     }
+    if (!cols.some((c) => c.name === "detail")) {
+      this.db.exec("ALTER TABLE reminders ADD COLUMN detail TEXT");
+    }
   }
 
   private expireStale(): void {
@@ -100,8 +105,8 @@ export class ReminderStore {
 
     this.db
       .prepare(
-        `INSERT INTO reminders (id, session_id, repo_path, branch, summary, due_at, status, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)`
+        `INSERT INTO reminders (id, session_id, repo_path, branch, summary, detail, due_at, status, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`
       )
       .run(
         id,
@@ -109,6 +114,7 @@ export class ReminderStore {
         input.repoPath ?? null,
         input.branch ?? null,
         input.summary,
+        input.detail ?? null,
         input.dueAt ?? null,
         now,
         expiresAt
@@ -168,7 +174,7 @@ export class ReminderStore {
     return this.get(fullId);
   }
 
-  update(id: string, fields: { summary?: string; dueAt?: string }): Reminder | null {
+  update(id: string, fields: { summary?: string; detail?: string; dueAt?: string }): Reminder | null {
     const fullId = this.resolveId(id) ?? id;
     const sets: string[] = [];
     const params: unknown[] = [];
@@ -176,6 +182,10 @@ export class ReminderStore {
     if (fields.summary !== undefined) {
       sets.push("summary = ?");
       params.push(fields.summary);
+    }
+    if (fields.detail !== undefined) {
+      sets.push("detail = ?");
+      params.push(fields.detail);
     }
     if (fields.dueAt !== undefined) {
       sets.push("due_at = ?");
@@ -209,10 +219,11 @@ export class ReminderStore {
         const expiresAt = addDays(new Date(), EXPIRY_DAYS).toISOString();
         this.db
           .prepare(
-            "UPDATE reminders SET summary = ?, due_at = ?, branch = ?, expires_at = ? WHERE id = ?"
+            "UPDATE reminders SET summary = ?, detail = ?, due_at = ?, branch = ?, expires_at = ? WHERE id = ?"
           )
           .run(
             input.summary,
+            input.detail ?? existing.detail,
             input.dueAt ?? existing.dueAt,
             input.branch ?? existing.branch,
             expiresAt,
@@ -252,6 +263,7 @@ function rowToReminder(row: unknown): Reminder {
     repoPath: (r.repo_path as string) ?? null,
     branch: (r.branch as string) ?? null,
     summary: r.summary as string,
+    detail: (r.detail as string) ?? null,
     dueAt: (r.due_at as string) ?? null,
     status: r.status as ReminderStatus,
     snoozedUntil: (r.snoozed_until as string) ?? null,
