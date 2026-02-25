@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { addDays } from "date-fns";
 
 const EXPIRY_DAYS = 7;
+const VALID_STATUSES = new Set(["active", "snoozed", "dismissed", "expired", "in_progress"]);
 
 export type ReminderStatus =
   | "active"
@@ -16,6 +17,7 @@ export interface Reminder {
   sessionId: string | null;
   repoPath: string | null;
   sessionDir: string | null;
+  repoName: string | null;
   branch: string | null;
   summary: string;
   detail: string | null;
@@ -32,6 +34,7 @@ export interface CreateInput {
   sessionId?: string;
   repoPath?: string;
   sessionDir?: string;
+  repoName?: string;
   branch?: string;
   dueAt?: string;
 }
@@ -41,7 +44,13 @@ export class ReminderStore {
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
+    this.initSchema();
+    this.runMigrations();
+  }
+
+  private initSchema(): void {
     this.db.exec("PRAGMA journal_mode = WAL");
+    this.db.exec("PRAGMA busy_timeout = 5000");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS reminders (
         id            TEXT PRIMARY KEY,
@@ -56,6 +65,7 @@ export class ReminderStore {
       );
       CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status);
       CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(due_at);
+      CREATE INDEX IF NOT EXISTS idx_reminders_expires_at ON reminders(expires_at);
 
       -- Deduplicate before creating unique index (keep newest per session_id)
       DELETE FROM reminders WHERE id IN (
@@ -71,19 +81,18 @@ export class ReminderStore {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_session_unique
         ON reminders(session_id) WHERE session_id IS NOT NULL AND status IN ('active', 'snoozed', 'in_progress');
     `);
+  }
 
-    // Migration: add branch column
+  private runMigrations(): void {
     const cols = this.db
       .prepare("PRAGMA table_info(reminders)")
       .all() as { name: string }[];
-    if (!cols.some((c) => c.name === "branch")) {
-      this.db.exec("ALTER TABLE reminders ADD COLUMN branch TEXT");
-    }
-    if (!cols.some((c) => c.name === "detail")) {
-      this.db.exec("ALTER TABLE reminders ADD COLUMN detail TEXT");
-    }
-    if (!cols.some((c) => c.name === "session_dir")) {
-      this.db.exec("ALTER TABLE reminders ADD COLUMN session_dir TEXT");
+    const existing = new Set(cols.map((c) => c.name));
+    const additions = ["branch", "detail", "session_dir", "repo_name"];
+    for (const col of additions) {
+      if (!existing.has(col)) {
+        this.db.exec(`ALTER TABLE reminders ADD COLUMN ${col} TEXT`);
+      }
     }
   }
 
@@ -103,6 +112,21 @@ export class ReminderStore {
       .run();
   }
 
+  /** Run expiry + unsnooze in one call (used by CLI). */
+  expire(): void {
+    this.expireStale();
+    this.unsnoozeDue();
+  }
+
+  /** Dismiss active reminders for a repo that belong to a different session. */
+  dismissOtherSessions(repoPath: string, currentSessionId: string): void {
+    this.db
+      .prepare(
+        "UPDATE reminders SET status = 'dismissed' WHERE repo_path = ? AND session_id != ? AND status IN ('active', 'snoozed', 'in_progress')"
+      )
+      .run(repoPath, currentSessionId);
+  }
+
   create(input: CreateInput): Reminder {
     const id = randomUUID();
     const now = new Date().toISOString();
@@ -110,14 +134,15 @@ export class ReminderStore {
 
     this.db
       .prepare(
-        `INSERT INTO reminders (id, session_id, repo_path, session_dir, branch, summary, detail, due_at, status, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`
+        `INSERT INTO reminders (id, session_id, repo_path, session_dir, repo_name, branch, summary, detail, due_at, status, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`
       )
       .run(
         id,
         input.sessionId ?? null,
         input.repoPath ?? null,
         input.sessionDir ?? null,
+        input.repoName ?? null,
         input.branch ?? null,
         input.summary,
         input.detail ?? null,
@@ -225,7 +250,7 @@ export class ReminderStore {
         const expiresAt = addDays(new Date(), EXPIRY_DAYS).toISOString();
         this.db
           .prepare(
-            "UPDATE reminders SET summary = ?, detail = ?, due_at = ?, branch = ?, session_dir = ?, expires_at = ? WHERE id = ?"
+            "UPDATE reminders SET summary = ?, detail = ?, due_at = ?, branch = ?, session_dir = ?, repo_name = ?, expires_at = ? WHERE id = ?"
           )
           .run(
             input.summary,
@@ -233,6 +258,7 @@ export class ReminderStore {
             input.dueAt ?? existing.dueAt,
             input.branch ?? existing.branch,
             input.sessionDir ?? existing.sessionDir,
+            input.repoName ?? existing.repoName,
             expiresAt,
             existing.id
           );
@@ -264,18 +290,23 @@ export class ReminderStore {
 
 function rowToReminder(row: unknown): Reminder {
   const r = row as Record<string, unknown>;
+  const status = String(r.status ?? "active");
+  if (!VALID_STATUSES.has(status)) {
+    console.warn(`[Poke] unexpected reminder status: ${status}`);
+  }
   return {
-    id: r.id as string,
-    sessionId: (r.session_id as string) ?? null,
-    repoPath: (r.repo_path as string) ?? null,
-    sessionDir: (r.session_dir as string) ?? null,
-    branch: (r.branch as string) ?? null,
-    summary: r.summary as string,
-    detail: (r.detail as string) ?? null,
-    dueAt: (r.due_at as string) ?? null,
-    status: r.status as ReminderStatus,
-    snoozedUntil: (r.snoozed_until as string) ?? null,
-    createdAt: r.created_at as string,
-    expiresAt: r.expires_at as string,
+    id: String(r.id ?? ""),
+    sessionId: r.session_id != null ? String(r.session_id) : null,
+    repoPath: r.repo_path != null ? String(r.repo_path) : null,
+    sessionDir: r.session_dir != null ? String(r.session_dir) : null,
+    repoName: r.repo_name != null ? String(r.repo_name) : null,
+    branch: r.branch != null ? String(r.branch) : null,
+    summary: String(r.summary ?? ""),
+    detail: r.detail != null ? String(r.detail) : null,
+    dueAt: r.due_at != null ? String(r.due_at) : null,
+    status: VALID_STATUSES.has(status) ? (status as ReminderStatus) : "active",
+    snoozedUntil: r.snoozed_until != null ? String(r.snoozed_until) : null,
+    createdAt: String(r.created_at ?? ""),
+    expiresAt: String(r.expires_at ?? ""),
   };
 }
