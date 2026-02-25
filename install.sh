@@ -35,9 +35,17 @@ fi
 # 3. Install hooks
 echo "[3/3] Installing hooks..."
 mkdir -p "$HOOKS_DIR"
-cp "$SCRIPT_DIR/hooks/session-start.sh" "$HOOKS_DIR/"
-cp "$SCRIPT_DIR/hooks/session-stop.sh" "$HOOKS_DIR/"
-chmod +x "$HOOKS_DIR"/*.sh
+
+for hook in session-start.sh session-stop.sh; do
+  SRC="$SCRIPT_DIR/hooks/$hook"
+  DST="$HOOKS_DIR/$hook"
+  if [ -f "$DST" ] && ! grep -q "^# poke-managed" "$DST"; then
+    echo "  SKIP $hook — exists but not poke-managed. Back up or remove it first."
+    continue
+  fi
+  cp "$SRC" "$DST"
+  chmod +x "$DST"
+done
 
 if command -v jq &>/dev/null; then
   mkdir -p "$(dirname "$SETTINGS_FILE")"

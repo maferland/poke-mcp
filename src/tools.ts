@@ -67,12 +67,13 @@ export function registerTools(
         }
 
         const sessionId = input.sessionId || detectSessionId();
-        const reminder = store.create({ ...input, sessionId, dueAt });
+        const { reminder, created } = store.upsert({ ...input, sessionId, dueAt });
+        const verb = created ? "Created" : "Updated";
         return {
           content: [
             {
               type: "text" as const,
-              text: `Created reminder ${reminder.id.slice(0, 8)}: "${reminder.summary}"${
+              text: `${verb} reminder ${reminder.id.slice(0, 8)}: "${reminder.summary}"${
                 reminder.dueAt ? ` (due ${reminder.dueAt})` : ""
               }`,
             },

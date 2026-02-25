@@ -76,11 +76,11 @@ describe("MCP Tools", () => {
   it("poke_list returns reminders", async () => {
     await client.callTool({
       name: "poke_create",
-      arguments: { summary: "one" },
+      arguments: { summary: "one", sessionId: "sess-list-1" },
     });
     await client.callTool({
       name: "poke_create",
-      arguments: { summary: "two" },
+      arguments: { summary: "two", sessionId: "sess-list-2" },
     });
     const result = await client.callTool({
       name: "poke_list",
@@ -172,5 +172,26 @@ describe("MCP Tools", () => {
     });
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("not found");
+  });
+
+  it("poke_create deduplicates by session_id", async () => {
+    const r1 = await client.callTool({
+      name: "poke_create",
+      arguments: { summary: "first", sessionId: "sess-dedup" },
+    });
+    expect(getText(r1)).toContain("Created");
+
+    const r2 = await client.callTool({
+      name: "poke_create",
+      arguments: { summary: "updated", sessionId: "sess-dedup" },
+    });
+    expect(getText(r2)).toContain("Updated");
+
+    const list = await client.callTool({
+      name: "poke_list",
+      arguments: {},
+    });
+    expect(getText(list)).toContain("1 reminder(s)");
+    expect(getText(list)).toContain("updated");
   });
 });
