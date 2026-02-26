@@ -54,6 +54,12 @@ Reminders are deduplicated by `session_id`. Calling `poke_create` twice in the s
 
 Re-run `./install.sh`. Hooks with the `# poke-managed` marker are overwritten safely. Custom hooks without the marker are skipped with a warning.
 
+## Support
+
+If Poke helps you stay on track, consider buying me a coffee:
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-yellow?style=for-the-badge&logo=buy-me-a-coffee)](https://buymeacoffee.com/maferland)
+
 ## License
 
 MIT — see [LICENSE](LICENSE)
