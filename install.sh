@@ -43,8 +43,7 @@ for hook in session-start.sh session-stop.sh; do
     echo "  SKIP $hook — exists but not poke-managed. Back up or remove it first."
     continue
   fi
-  cp "$SRC" "$DST"
-  chmod +x "$DST"
+  ln -sf "$SRC" "$DST"
 done
 
 if command -v jq &>/dev/null; then
