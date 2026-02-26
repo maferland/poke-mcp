@@ -10,6 +10,7 @@ Pair with the [Poke menu bar app](https://github.com/maferland/poke) for a visua
 
 ```bash
 brew install maferland/tap/poke-mcp
+$(brew --prefix poke-mcp)/libexec/install.sh
 ```
 
 ### From source

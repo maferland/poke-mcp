@@ -32,13 +32,11 @@ class PokeMcp < Formula
     libexec.install Dir["*"]
   end
 
-  def post_install
-    system libexec/"install.sh"
-  end
-
   def caveats
     <<~EOS
-      Restart Claude Code for the MCP server and hooks to take effect.
+      Run the installer to register the MCP server and hooks:
+
+        #{libexec}/install.sh
 
       Tools: poke_create, poke_list, poke_snooze, poke_dismiss, poke_update, poke_resume
     EOS
