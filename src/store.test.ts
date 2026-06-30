@@ -212,4 +212,20 @@ describe("ReminderStore", () => {
       expect(found?.sessionId).toBe("sess-123");
     });
   });
+
+  describe("dismissStaleSameBranch", () => {
+    it("dismisses same-branch sessions only", () => {
+      store.create({ summary: "a-work", sessionId: "sess-a1", repoPath: "/repo", branch: "feature-a" });
+      store.create({ summary: "b-work", sessionId: "sess-b1", repoPath: "/repo", branch: "feature-b" });
+      store.dismissStaleSameBranch("/repo", "feature-a", "sess-a2");
+      expect(store.findBySessionId("sess-a1")).toBeNull();
+      expect(store.findBySessionId("sess-b1")).not.toBeNull();
+    });
+
+    it("skips null-branch reminders", () => {
+      store.create({ summary: "no branch", sessionId: "sess-x", repoPath: "/repo" });
+      store.dismissStaleSameBranch("/repo", "main", "sess-y");
+      expect(store.findBySessionId("sess-x")).not.toBeNull();
+    });
+  });
 });
